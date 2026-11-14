@@ -15,6 +15,19 @@ for (perfil in unique(dados$perfil)) {
   assign(perfil, dados[dados$perfil == perfil, ])
 }
 
+# análise descritiva das visitas por perfil
+
+dados |>
+  group_by(perfil) |>
+  summarise(
+    n = n(),
+    media = mean(visitas),
+    mediana = median(visitas),
+    maximo = max(visitas),
+    proporcao_zeros = mean(visitas == 0),
+    .groups = "drop"
+  )
+
 ##### modelo ZIP #####
 
 # parâmetros
@@ -85,7 +98,7 @@ negative_logv <- function(params, y) {
   return(resultado)
 }
 
-# vamos otimizar!!
+# optim()
 
 # pontos iniciais
 
@@ -97,7 +110,7 @@ pontos_iniciais <- data.frame(
 
 # otimização para cada perfil
 
-# Perfis
+# perfis
 perfis <- list(
   baixo = baixo,
   medio = medio,
@@ -110,9 +123,11 @@ resultados <- do.call(rbind, lapply(names(perfis), function(perfil) {
   
   do.call(rbind, lapply(seq_len(nrow(pontos_iniciais)), function(i) {
     
+    # pontos iniciais
     alpha_0 <- pontos_iniciais$alpha[i]
     beta_0 <- pontos_iniciais$beta[i]
     
+    # otimizando
     resultado <- optim(
       par = c(alpha_0, beta_0),
       fn = negative_logv,
@@ -178,15 +193,108 @@ ggplot(resultados) +
   
   labs(
     title = "Estimação por Máxima Verossimilhança",
-    subtitle = "Comparação entre diferentes pontos iniciais",
+    subtitle = "Comparação entre diferentes pontos iniciais e perfis",
     x = "p — Probabilidade de zero estrutural",
     y = expression(lambda ~ "— Taxa da Poisson"),
     color = "Inicialização"
+  ) +
+  
+  guides(
+    color = guide_legend(
+      override.aes = list(shape = 1, fill = NA, size = 3)
+    )
   ) +
   
   theme_minimal(base_size = 12)
 
 
 ##### Newton-Raphson #####
+
+# primeiras derivadas em relação a p e lambda
+
+score_zip <- function(p, lambda, y) {
+  
+  n_0 <- sum(y == 0)
+  
+  n_pos <- sum(y > 0)
+  
+  S_pos <- sum(y[y > 0])
+  
+  score_p <- (n_0*(1 - exp(-lambda)))/(p + (1 - p)*exp(-lambda)) - n_pos/(1 - p)
+  
+  score_lambda <- (n_0*(-exp(-lambda) + p*exp(-lambda)))/(p + (1 - p)*exp(-lambda)) - n_pos + S_pos/lambda
+  
+  return(c(score_p, score_lambda))
+}
+
+# matriz hessiana
+
+hessiana_zip <- function(p, lambda, y) {
+  
+  n_0 <- sum(y == 0)
+  n_pos <- sum(y > 0)
+  S_pos <- sum(y[y > 0])
+  
+  H_pp <- (-n_0*(1 - exp(-lambda))^2)/(p + (1 - p)*exp(-lambda))^2 - n_pos/(1 - p)^2
+  
+  H_p_lambda <- (n_0*exp(-lambda))/(p + (1 - p)*exp(-lambda))^2
+  
+  H_lambda_lambda <- (n_0*exp(-lambda)*p*(1 - p))/(p + (1 - p)*exp(-lambda))^2 - S_pos/lambda^2
+  
+  H <- matrix(
+    c(H_pp, H_p_lambda,
+      H_p_lambda, H_lambda_lambda),
+    nrow = 2,
+    byrow = TRUE
+  )
+  
+  return(H)
+}
+
+# aplicando o newton-raphson
+
+p_atual <- 0.15
+lambda_atual <- 4
+B <- 10
+
+theta_atual <- c(p_atual, lambda_atual)
+
+newton_raphson <- function(theta, y, B) {
+  
+  historico <- matrix(
+    NA_real_,
+    nrow = B + 1,
+    ncol = 2
+  )
+  
+  colnames(historico) <- c("p", "lambda")
+  
+  historico[1, ] <- theta
+  
+  for (i in seq_len(B)) {
+    
+    U <- score_zip(theta[1], theta[2], y)
+    
+    H <- hessiana_zip(theta[1], theta[2], y)
+    
+    delta <- solve(H, U)
+    
+    theta <- theta - delta
+    
+    historico[i + 1, ] <- theta
+  }
+  
+  return(historico)
+}
+
+theta_baixo <- newton_raphson(theta_atual, baixo$visitas, B)
+theta_medio <- newton_raphson(theta_atual, medio$visitas, B)
+theta_alto <- newton_raphson(theta_atual, alto$visitas, B)
+
+theta_baixo
+theta_medio
+theta_alto
+
+
 
 
