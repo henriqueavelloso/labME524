@@ -1,5 +1,9 @@
 ############### Parte 1 - Otimização numérica ############### 
 
+# seed
+
+set.seed(248214)
+
 ###### pacotes #####
 
 library(tidyverse)
@@ -108,7 +112,7 @@ pontos_iniciais <- data.frame(
   beta = c(0, 1.5, 2)
 )
 
-# otimização para cada perfil
+# otimizacao para cada perfil
 
 # perfis
 perfis <- list(
@@ -251,13 +255,22 @@ hessiana_zip <- function(p, lambda, y) {
   return(H)
 }
 
-# aplicando o newton-raphson
+##### aplicando o newton-raphson #####
 
-p_atual <- 0.15
-lambda_atual <- 4
+pontos_iniciais <- data.frame(
+  inicializacao = paste("Ponto", 1:3),
+  p_inicial = plogis(c(-2, -0.5, 1)),
+  lambda_inicial = exp(c(0, 1.5, 2))
+)
+
+# numero de iteracoes
 B <- 10
 
-theta_atual <- c(p_atual, lambda_atual)
+perfis <- list(
+  baixo = baixo$visitas,
+  medio = medio$visitas,
+  alto = alto$visitas
+)
 
 newton_raphson <- function(theta, y, B) {
   
@@ -268,33 +281,161 @@ newton_raphson <- function(theta, y, B) {
   )
   
   colnames(historico) <- c("p", "lambda")
-  
   historico[1, ] <- theta
   
   for (i in seq_len(B)) {
-    
+    # score
     U <- score_zip(theta[1], theta[2], y)
-    
+    # hessiana
     H <- hessiana_zip(theta[1], theta[2], y)
-    
-    delta <- solve(H, U)
-    
-    theta <- theta - delta
-    
+    # theta_i+1
+    theta <- theta - solve(H, U)
+    # atualizand parametros
     historico[i + 1, ] <- theta
   }
   
   return(historico)
 }
 
-theta_baixo <- newton_raphson(theta_atual, baixo$visitas, B)
-theta_medio <- newton_raphson(theta_atual, medio$visitas, B)
-theta_alto <- newton_raphson(theta_atual, alto$visitas, B)
+resultados_nr <- data.frame()
+historico_nr <- data.frame()
 
-theta_baixo
-theta_medio
-theta_alto
+for (perfil in names(perfis)) {
+  for (j in 1:nrow(pontos_iniciais)) {
+    
+    ponto <- pontos_iniciais[j, ]
+    
+    theta_inicial <- c(
+      ponto$p_inicial,
+      ponto$lambda_inicial
+    )
+    
+    # newton-raphson
+    ajuste <- newton_raphson(
+      theta_inicial, perfis[[perfil]], B
+    )
+    
+    # resultados finais
+    resultados_nr <- bind_rows(
+      resultados_nr,
+      data.frame(
+        perfil = perfil,
+        inicializacao = ponto$inicializacao,
+        p_inicial = ponto$p_inicial,
+        lambda_inicial = ponto$lambda_inicial,
+        p_estimado = ajuste[B + 1, 1],
+        lambda_estimado = ajuste[B + 1, 2]
+      )
+    )
+    
+    # histórico das iterações
+    historico_nr <- bind_rows(
+      historico_nr,
+      data.frame(
+        perfil = perfil,
+        inicializacao = ponto$inicializacao,
+        iteracao = 0:B,
+        p = ajuste[, 1],
+        lambda = ajuste[, 2]
+      )
+    )
+  }
+}
 
+print(resultados_nr)
 
+# visualização -- comparação dos diferentes pontos inicias para cada perfil de risco
 
+ggplot(resultados_nr) +
+  
+  geom_segment(
+    aes(
+      x = p_inicial,
+      y = lambda_inicial,
+      xend = p_estimado,
+      yend = lambda_estimado,
+      color = inicializacao
+    ),
+    arrow = arrow(length = grid::unit(0.15, "cm")),
+    alpha = 0.7
+  ) +
+  
+  geom_point(
+    aes(
+      x = p_inicial,
+      y = lambda_inicial,
+      color = inicializacao
+    ),
+    size = 3,
+    shape = 1,
+    stroke = 1.2
+  ) +
+  
+  geom_point(
+    aes(
+      x = p_estimado,
+      y = lambda_estimado,
+      color = inicializacao
+    ),
+    size = 3
+  ) +
+  
+  facet_wrap(~perfil, nrow = 1) +
+  
+  labs(
+    title = "Estimação pelo Método de Newton–Raphson",
+    subtitle = "Comparação entre diferentes pontos iniciais e perfis",
+    x = "p — Probabilidade de zero estrutural",
+    y = expression(lambda ~ "— Taxa da Poisson"),
+    color = "Inicialização"
+  ) +
+  
+  guides(
+    color = guide_legend(
+      override.aes = list(shape = 1, fill = NA, size = 3)
+    )
+  ) +
+  
+  theme_minimal(base_size = 12)
 
+### grafico temporal ###
+
+historico_long <- historico_nr %>%
+  pivot_longer(
+    cols = c(p, lambda),
+    names_to = "parametro",
+    values_to = "valor"
+  )
+
+ggplot(
+  historico_long,
+  aes(
+    x = iteracao,
+    y = valor,
+    color = inicializacao,
+    group = inicializacao
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2) +
+  facet_grid(parametro ~ perfil, scales = "free_y") +
+  scale_x_continuous(breaks = 0:B) +
+  labs(
+    title = "Trajetória das estimativas pelo método de Newton-Raphson",
+    subtitle = "Evolução dos parâmetros ao longo das iterações",
+    x = "Iteração",
+    y = "Valor do parâmetro",
+    color = "Ponto inicial"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    plot.subtitle = element_text(size = 16),
+    axis.title = element_text(size = 17),
+    axis.text = element_text(size = 15),
+    strip.text = element_text(size = 17, face = "bold"),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 15),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
